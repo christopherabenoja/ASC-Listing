@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scannable Listing Generator</title>
+<meta name="theme-color" content="#B6431A">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<!-- Bundled locally in vendor/ — no external network calls, no CDN/firewall
+     dependency, and works fully offline once the app is loaded once. -->
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/JsBarcode.all.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/html2canvas.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+
+<style>
+:root{
+  --paper:#FAFAF7;
+  --ink:#1A1A18;
+  --ink-soft:#4A4A44;
+  --line:#D8D5C9;
+  --panel:#FFFFFF;
+  --petrol:#B6431A;
+  --petrol-dim:#f7ece7;
+  --amber:#D68A00;
+  --amber-dim:#fbeed9;
+  --red:#B3341F;
+  --mono: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: 'IBM Plex Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --radius: 3px;
+}
+@font-face{font-family:'IBM Plex Sans';src:local('IBM Plex Sans');}
+* { box-sizing: border-box; }
+html,body{ margin:0; padding:0; }
+body{
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: 60px;
+}
+::selection{ background: var(--amber-dim); }
+
+/* ---------- App shell ---------- */
+.topbar{
+  position: sticky; top:0; z-index: 40;
+  background: var(--petrol);
+  color: var(--paper);
+  padding: 14px 20px;
+  display:flex; align-items:center; justify-content:space-between;
+  border-bottom: 3px solid var(--amber);
+}
+.brand{
+  display:flex; align-items:center; gap:10px;
+  font-family: var(--mono);
+  letter-spacing: 0.02em;
+}
+.brand .mark{
+  width:26px;height:26px;border-radius:4px;
+  background: repeating-linear-gradient(90deg, var(--paper) 0 2px, transparent 2px 4px, var(--paper) 4px 6px, transparent 6px 9px, var(--paper) 9px 12px);
+  background-color: var(--petrol);
+  border: 1px solid var(--paper);
+}
+.brand .title{ font-size:15px; font-weight:600; }
+.brand .subtitle{ font-size:10.5px; opacity:.75; margin-top:1px; }
+.tabs{ display:flex; gap:4px; }
+.tab-btn{
+  font-family: var(--mono); font-size:12px; letter-spacing:.03em;
+  background:transparent; color:var(--paper); border:1px solid rgba(250,250,247,.35);
+  padding:7px 12px; border-radius: var(--radius); cursor:pointer;
+  opacity:.75;
+}
+.tab-btn.active{ background: var(--amber); border-color: var(--amber); color:#1A1A18; opacity:1; font-weight:600; }
+.tab-btn .count{ opacity:.7; margin-left:4px; }
+
+.wrap{ max-width: 1180px; margin: 0 auto; padding: 22px 20px 0; }
+.eyebrow{
+  font-family: var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+  color: var(--amber); margin-bottom:6px;
+}
+h1{ font-size:22px; margin:0 0 4px; }
+h2{ font-size:16px; margin:0 0 4px; }
+p.lead{ color:var(--ink-soft); margin:0 0 20px; font-size:13.5px; max-width:640px; }
+
+.panel{
+  background: var(--panel); border:1px solid var(--line); border-radius: var(--radius);
+  padding: 20px; margin-bottom: 20px;
+}
+
+/* ---------- Import ---------- */
+.dropzone{
+  border: 1.5px dashed var(--line); border-radius: var(--radius);
+  padding: 34px 20px; text-align:center; cursor:pointer;
+  transition: border-color .15s, background .15s;
+  background: repeating-linear-gradient(135deg, transparent 0 14px, rgba(27,75,67,.02) 14px 28px);
+}
+.dropzone:hover, .dropzone.drag{ border-color: var(--petrol); background: var(--petrol-dim); }
+.dropzone .icon{ font-family: var(--mono); font-size:26px; color:var(--petrol); margin-bottom:8px; }
+.dropzone .hint{ font-size:12px; color:var(--ink-soft); margin-top:6px; }
+input[type=file]{ display:none; }
+
+.btn{
+  font-family: var(--sans); font-size:13px; font-weight:600;
+  border-radius: var(--radius); padding: 9px 16px; cursor:pointer;
+  border:1px solid transparent; display:inline-flex; align-items:center; gap:7px;
+}
+.btn-primary{ background: var(--petrol); color:var(--paper); }
+.btn-primary:hover{ background:#153b35; }
+.btn-amber{ background: var(--amber); color:#1A1A18; }
+.btn-amber:hover{ background:#c17e00; }
+.btn-outline{ background:transparent; color:var(--ink); border-color:var(--line); }
+.btn-outline:hover{ border-color: var(--petrol); color:var(--petrol); }
+.btn-sm{ padding:6px 10px; font-size:12px; }
+.btn:disabled{ opacity:.4; cursor:not-allowed; }
+
+table.map-table{ width:100%; border-collapse:collapse; font-size:13px; margin-top:14px; }
+table.map-table th{ text-align:left; font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); padding:8px 8px; border-bottom:1px solid var(--line); }
+table.map-table td{ padding:7px 8px; border-bottom:1px solid #EFEDE4; vertical-align:middle; }
+table.map-table select{ width:100%; padding:6px; border:1px solid var(--line); border-radius:var(--radius); font-size:12.5px; background:var(--paper); font-family:var(--sans); }
+.src-col{ font-family: var(--mono); font-size:12px; color:var(--petrol); }
+.sheet-select-row{ display:flex; align-items:center; gap:10px; margin-top:14px; font-size:13px; }
+.sheet-select-row select{ padding:6px 10px; border:1px solid var(--line); border-radius:var(--radius); font-family: var(--sans); }
+
+/* ---------- Items table ---------- */
+.toolbar{ display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+.search{
+  flex:1; min-width:180px; padding:9px 12px; border:1px solid var(--line); border-radius: var(--radius);
+  font-family: var(--sans); font-size:13px; background:var(--panel);
+}
+.badge{ font-family:var(--mono); font-size:11px; background:var(--petrol-dim); color:var(--petrol); padding:3px 8px; border-radius:10px; }
+.badge.warn{ background:var(--amber-dim); color:#8a5c00; }
+.info-note{
+  font-size:12.5px; color:var(--ink-soft); background:var(--petrol-dim); border:1px solid #ecd3c5;
+  border-radius: var(--radius); padding:11px 14px; margin-bottom:14px; line-height:1.5;
+}
+.info-note strong{ color:var(--petrol); }
+
+.items-scroll{ overflow-x:auto; border:1px solid var(--line); border-radius: var(--radius); }
+table.items{ width:100%; border-collapse:collapse; font-size:12.5px; min-width:1100px; }
+table.items thead th{
+  position:sticky; top:0; background:#F1EFE6; text-align:left; font-family:var(--mono);
+  font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft);
+  padding:9px 8px; border-bottom:1px solid var(--line); white-space:nowrap;
+}
+table.items td{ padding:6px 8px; border-bottom:1px solid #F0EEE5; vertical-align:middle; white-space:nowrap; }
+table.items tr:hover td{ background: #FBFAF6; }
+table.items input, table.items td select{
+  width:100%; min-width:80px; padding:5px 6px; border:1px solid transparent; border-radius:var(--radius);
+  font-family: var(--mono); font-size:12px; background:transparent;
+}
+table.items input:hover, table.items input:focus, table.items td select:hover{
+  border-color: var(--line); background: var(--paper);
+}
+table.items input.missing{ background: var(--amber-dim); border-color:#e9c877; }
+.sap-cell{ font-family: var(--mono); font-weight:600; color:var(--petrol); }
+.photo-cell{ display:flex; align-items:center; gap:6px; }
+.thumb{ width:28px; height:28px; object-fit:cover; border-radius:3px; border:1px solid var(--line); flex-shrink:0; background:#fff; }
+.thumb-empty{ display:flex; align-items:center; justify-content:center; font-size:8px; color:var(--ink-soft); font-family:var(--mono); text-align:center; line-height:1.1; }
+.upload-btn{ cursor:pointer; font-size:11px; font-weight:600; color:var(--petrol); white-space:nowrap; border:1px solid var(--petrol); border-radius:3px; padding:5px 8px; flex-shrink:0; background:var(--petrol-dim); }
+.upload-btn:hover{ background:var(--petrol); color:var(--paper); }
+.upload-btn input[type=file]{ display:none; }
+.row-actions{ display:flex; gap:5px; }
+
+/* ---------- Label / listing card ---------- */
+.overlay{
+  position:fixed; inset:0; background:rgba(20,20,18,.55); z-index:100;
+  display:flex; align-items:flex-start; justify-content:center; padding:30px 16px; overflow-y:auto;
+}
+.hidden{ display:none !important; }
+.label-shell{ background:var(--paper); border-radius: 4px; max-width: 760px; width:100%; }
+.label-toolbar{ display:flex; justify-content:space-between; align-items:center; padding:14px 18px; border-bottom:1px solid var(--line); background:var(--panel); border-radius:4px 4px 0 0; }
+.label-toolbar .actions{ display:flex; gap:8px; }
+
+.label-card{
+  background:#fff; margin: 18px; border: 1.5px solid var(--ink);
+  position:relative; font-family: var(--sans);
+}
+.label-card::before, .label-card::after{
+  content:""; position:absolute; width:14px; height:14px; border: 2px solid var(--amber);
+}
+.label-card::before{ top:-2px; left:-2px; border-right:none; border-bottom:none; }
+.label-card::after{ bottom:-2px; right:-2px; border-left:none; border-top:none; }
+
+.label-head{
+  display:flex; justify-content:space-between; align-items:center;
+  padding: 12px 18px; border-bottom: 1.5px solid var(--ink); background: var(--petrol); color:var(--paper);
+}
+.label-head .company{ font-weight:700; font-size:14px; letter-spacing:.02em; }
+.label-head .doc-id{ font-family: var(--mono); font-size:10.5px; opacity:.8; }
+
+.label-body{ display:grid; grid-template-columns: 1fr 1.3fr; gap:0; }
+.label-media{ padding:16px; border-right:1px solid var(--line); display:flex; flex-direction:column; gap:10px; align-items:center; justify-content:flex-start; }
+.label-media img{ width:100%; max-width:220px; aspect-ratio:1/1; object-fit:contain; border:1px solid var(--line); background:#fff; }
+.media-upload-row{ width:100%; max-width:220px; }
+.media-link-input{ width:100%; max-width:220px; padding:6px 8px; border:1px solid var(--line); border-radius:var(--radius); font-size:11px; font-family:var(--sans); text-align:center; }
+.no-image{ width:100%; max-width:220px; aspect-ratio:1/1; border:1px dashed var(--line); display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-family:var(--mono); font-size:11px; text-align:center; padding:10px; }
+
+.label-fields{ padding:16px 18px; }
+.field-row{ display:flex; justify-content:space-between; gap:10px; padding:6px 0; border-bottom:1px dotted var(--line); font-size:12.5px; }
+.field-row .k{ color: var(--ink-soft); font-family: var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; padding-top:2px; }
+.field-row .v{ font-weight:600; text-align:right; }
+.field-row.desc .v{ text-align:left; }
+.price-row .v{ font-family: var(--mono); color: var(--petrol); font-size:14px; }
+
+.customs-strip{ display:flex; gap:0; border-top:1.5px solid var(--ink); }
+.customs-strip .cell{ flex:1; padding:10px 18px; }
+.customs-strip .cell + .cell{ border-left:1px dashed var(--ink); }
+.customs-strip .k{ font-family: var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--amber); }
+.customs-strip .v{ font-weight:700; font-size:13px; margin-top:2px; }
+
+.barcode-strip{ border-top:1.5px solid var(--ink); display:grid; grid-template-columns: repeat(3,1fr); }
+.barcode-box{ padding:12px 10px 10px; text-align:center; }
+.barcode-box + .barcode-box{ border-left:1px dashed var(--ink); }
+.barcode-box .label{ font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-soft); margin-bottom:4px; }
+.barcode-box canvas{ max-width:100%; }
+.barcode-box .digits{ font-family: var(--mono); font-size:11px; margin-top:2px; }
+.barcode-box .fmt{ font-family: var(--mono); font-size:9px; color:var(--ink-soft); }
+.barcode-box.empty{ color:var(--ink-soft); font-family:var(--mono); font-size:11px; padding-top:30px; }
+
+/* ---------- Empty state / footer ---------- */
+.empty-state{ text-align:center; padding:50px 20px; color:var(--ink-soft); }
+.empty-state .glyph{ font-family:var(--mono); font-size:13px; color:var(--amber); margin-bottom:10px; }
+.toast{
+  position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+  background: var(--ink); color:var(--paper); padding:10px 18px; border-radius: var(--radius);
+  font-size:13px; z-index:200; opacity:0; pointer-events:none; transition: opacity .2s, transform .2s;
+}
+.toast.show{ opacity:1; transform:translateX(-50%) translateY(-6px); }
+.install-strip{ display:none; align-items:center; gap:10px; background: var(--amber-dim); border:1px solid #e9c877; border-radius:var(--radius); padding:10px 14px; font-size:12.5px; margin-bottom:16px; }
+.install-strip.show{ display:flex; }
+.install-strip button{ margin-left:auto; }
+
+@media (max-width: 720px){
+  .label-body{ grid-template-columns: 1fr; }
+  .label-media{ border-right:none; border-bottom:1px solid var(--line); }
+  .barcode-strip{ grid-template-columns: 1fr; }
+  .barcode-box + .barcode-box{ border-left:none; border-top:1px dashed var(--ink); }
+  .customs-strip{ flex-direction:column; }
+  .customs-strip .cell + .cell{ border-left:none; border-top:1px dashed var(--ink); }
+  table.items{ min-width:1400px; }
+  .tabs{ flex-wrap:wrap; }
+}
+@media print{
+  .topbar, .label-toolbar, .install-strip{ display:none !important; }
+  .overlay{ position:static; background:none; padding:0; }
+  .label-shell{ box-shadow:none; }
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="mark"></div>
+    <div>
+      <div class="title">Scannable Listing Generator</div>
+      <div class="subtitle">New launches &amp; customer listings</div>
+    </div>
+  </div>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="import" onclick="showTab('import')">Import</button>
+    <button class="tab-btn" data-tab="items" onclick="showTab('items')">Items <span class="count" id="itemCountBadge">(0)</span></button>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="install-strip" id="installStrip">
+    <span>Install this on your phone or desktop for one-tap access, even offline.</span>
+    <button class="btn btn-sm btn-outline" id="installBtn">Install app</button>
+  </div>
+
+  <!-- ============ IMPORT TAB ============ -->
+  <section id="tab-import">
+    <div class="eyebrow">Step 1</div>
+    <h1>Import item data</h1>
+    <p class="lead">Upload your SAP/BMF export (or any Excel/CSV) with case, bundle, and piece barcodes. Columns are auto-matched — you can correct the mapping before importing.</p>
+
+    <div class="panel">
+      <div class="dropzone" id="dropzone">
+        <div class="icon">▮▯▮▮▯▮▯▮▮</div>
+        <div><strong>Click to choose a file</strong> or drag it here</div>
+        <div class="hint">.xlsx, .xls, or .csv — e.g. a BMF export</div>
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+      </div>
+
+      <div id="sheetPicker" class="hidden">
+        <div class="sheet-select-row">
+          <label for="sheetSelect"><strong>Sheet:</strong></label>
+          <select id="sheetSelect"></select>
+        </div>
+      </div>
+
+      <div id="mappingArea" class="hidden">
+        <h2 style="margin-top:20px;">Confirm column mapping</h2>
+        <p class="lead" style="margin-bottom:8px;">We matched these automatically. Fields left as "— skip —" can be filled in manually after import.</p>
+        <table class="map-table" id="mapTable"></table>
+        <div style="margin-top:16px; display:flex; gap:10px; align-items:center;">
+          <button class="btn btn-primary" id="confirmImportBtn">Import rows</button>
+          <span id="rowPreviewCount" style="font-size:12.5px; color:var(--ink-soft);"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ITEMS TAB ============ -->
+  <section id="tab-items" class="hidden">
+    <div class="eyebrow">Step 2</div>
+    <h1>Review, complete &amp; generate</h1>
+    <p class="lead">Fill in anything your source file didn't have — HS Code, Country of Origin, prices, image link — then open an item to generate its listing.</p>
+
+    <div id="itemsEmptyState" class="empty-state">
+      <div class="glyph">— no items imported yet —</div>
+      <div>Go to <strong>Import</strong> to load a file.</div>
+    </div>
+
+    <div id="itemsContent" class="hidden">
+      <div class="info-note">
+        <strong>For photos your whole team can see:</strong> put the product photo in your shared
+        OneDrive/SharePoint folder → right-click it → <em>Share</em> → set access to
+        <em>"People in [company] with the link"</em> (view-only) → copy the link → paste it into the
+        Image URL field below, or in the item's <em>Open</em> view. The app converts it to a direct
+        image link automatically.<br>
+        <strong>Attach photos (bulk)</strong> opens your file picker for <em>this device only</em> —
+        select every photo at once with <strong>Ctrl+Click</strong> (Windows) or <strong>⌘+Click</strong>
+        (Mac) on each file, or <strong>Ctrl/⌘+A</strong> to grab a whole folder, then Open. Each is
+        matched to an item by filename = SAP code.
+      </div>
+      <div class="toolbar">
+        <input class="search" id="searchBox" placeholder="Search SAP code, description, brand…">
+        <span class="badge" id="filteredCount">0 items</span>
+        <span class="badge warn" id="incompleteCount">0 incomplete</span>
+        <button class="btn btn-outline btn-sm" id="selectAllBtn">Select all</button>
+        <button class="btn btn-outline btn-sm" id="bulkPhotoBtn" title="Select many photos at once — matched by filename = SAP code. Only visible on this device, not shared with your team.">Attach photos (bulk, this device only)</button>
+        <input type="file" id="bulkPhotoInput" accept="image/*" multiple class="hidden">
+        <button class="btn btn-amber btn-sm" id="exportSelectedBtn">Export selected (ZIP)</button>
+        <button class="btn btn-outline btn-sm" id="clearAllBtn">Clear all data</button>
+      </div>
+
+      <div class="items-scroll">
+        <table class="items" id="itemsTable">
+          <thead>
+            <tr>
+              <th></th>
+              <th>SAP Code</th>
+              <th>Brand</th>
+              <th>Description</th>
+              <th>Case BC</th>
+              <th>Bundle BC</th>
+              <th>Piece BC</th>
+              <th>Case Price (BHD)</th>
+              <th>Piece Price (BHD)</th>
+              <th>Dims (W×L×H)</th>
+              <th>Country of Origin</th>
+              <th>HS Code</th>
+              <th>Image URL</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="itemsTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<!-- ============ LABEL OVERLAY ============ -->
+<div class="overlay hidden" id="labelOverlay">
+  <div class="label-shell">
+    <div class="label-toolbar">
+      <strong id="labelOverlayTitle">Listing preview</strong>
+      <div class="actions">
+        <button class="btn btn-outline btn-sm" id="downloadXlsxBtn">Download Excel</button>
+        <button class="btn btn-amber btn-sm" id="downloadPdfBtn">Download PDF</button>
+        <button class="btn btn-outline btn-sm" onclick="closeLabel()">Close</button>
+      </div>
+    </div>
+    <div id="labelCardHost"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
