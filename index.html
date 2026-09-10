@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scannable Listing Generator</title>
+<meta name="theme-color" content="#14161A">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<!-- Bundled locally in vendor/ — no external network calls, no CDN/firewall
+     dependency, and works fully offline once the app is loaded once. -->
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/JsBarcode.all.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/html2canvas.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+
+<style>
+/* No web-font downloads: the app must work offline and behind the firewall,
+   so everything uses locally installed faces. */
+:root{
+  --paper:#F4F4F0;
+  --panel:#FFFFFF;
+  --ink:#14161A;
+  --ink-soft:#5C6068;
+  --ink-mute:#6B7078;
+  --line:#E3E3DE;
+  --line-strong:#D6D6D0;
+  --accent:#C2410C;
+  --accent-dark:#9A3412;
+  --accent-dim:#FFF6F1;
+  --ok:#15803D;
+  --ok-dim:#EAF6EE;
+  --warn:#B45309;
+  --warn-dim:#FDF3E4;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --radius: 10px;
+}
+*{ box-sizing:border-box; }
+html,body{ margin:0; padding:0; }
+body{
+  background:var(--paper); color:var(--ink); font-family:var(--sans);
+  font-size:14px; line-height:1.45;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  padding-bottom:60px;
+}
+::selection{ background:#FDE3D2; }
+a{ color:var(--accent); text-decoration:none; }
+a:hover{ color:var(--accent-dark); text-decoration:underline; }
+.hidden{ display:none !important; }
+
+/* ---------- App shell ---------- */
+.topbar{
+  position:sticky; top:0; z-index:40;
+  background:var(--panel); border-bottom:1px solid var(--line);
+  padding:12px 20px; display:flex; align-items:center; gap:20px; flex-wrap:wrap;
+}
+.brand{ display:flex; align-items:center; gap:11px; margin-right:auto; }
+.brand .mark{
+  width:30px; height:30px; border-radius:6px; flex-shrink:0; background:var(--ink);
+  background-image:
+    linear-gradient(90deg, transparent 7px, #fff 7px 9px, transparent 9px 11px, #fff 11px 12px, transparent 12px 14px, var(--accent) 14px 17px, transparent 17px 19px, #fff 19px 20px, transparent 20px 22px, #fff 22px 24px, transparent 24px);
+  background-size:100% 14px; background-position:0 8px; background-repeat:no-repeat;
+}
+.brand .title{ font-size:15px; font-weight:600; letter-spacing:-0.01em; }
+.brand .subtitle{ font-size:11.5px; color:var(--ink-mute); margin-top:2px; }
+
+.tabs{ display:flex; gap:4px; background:#F1F1EC; padding:3px; border-radius:9px; }
+.tab-btn{
+  display:inline-flex; align-items:center; gap:7px;
+  font-family:var(--sans); font-size:13px; font-weight:600;
+  background:transparent; color:var(--ink-mute); border:none;
+  padding:7px 13px; border-radius:7px; cursor:pointer;
+}
+.tab-btn::before{
+  content:attr(data-step); width:17px; height:17px; border-radius:50%;
+  background:var(--ink); color:#fff; font-family:var(--mono); font-size:10px;
+  display:inline-flex; align-items:center; justify-content:center;
+}
+.tab-btn.active{ background:var(--panel); color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.10); }
+.tab-btn .count{ font-family:var(--mono); font-size:11px; color:var(--ink-mute); font-weight:400; }
+
+.wrap{ max-width:1320px; margin:0 auto; padding:28px 20px 0; }
+.eyebrow{
+  font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.09em;
+  color:var(--accent); margin-bottom:8px;
+}
+h1{ font-size:27px; line-height:1.15; letter-spacing:-0.02em; margin:0 0 10px; font-weight:600; }
+h2{ font-size:16.5px; margin:0 0 4px; font-weight:600; letter-spacing:-0.01em; }
+p.lead{ color:var(--ink-soft); margin:0 0 22px; font-size:14.5px; line-height:1.55; max-width:56ch; text-wrap:pretty; }
+
+.panel{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:20px; }
+.import-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:24px; align-items:start; }
+.import-grid > section{ min-width:0; }
+
+/* ---------- Import ---------- */
+.dropzone{
+  border:1.5px dashed var(--line-strong); border-radius:10px;
+  padding:34px 20px; text-align:center; cursor:pointer; background:#FCFCFA;
+  transition:border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone.drag{ border-color:var(--accent); background:var(--accent-dim); }
+.dropzone .icon{
+  display:block; width:130px; height:34px; margin:0 auto 12px;
+  background-image:
+    linear-gradient(90deg,
+      var(--ink) 0 3px, transparent 3px 6px, var(--ink) 6px 7px, transparent 7px 10px,
+      var(--ink) 10px 12px, transparent 12px 16px, var(--ink) 16px 17px, transparent 17px 20px,
+      var(--ink) 20px 24px, transparent 24px 27px, var(--accent) 27px 28px, transparent 28px 31px,
+      var(--accent) 31px 33px, transparent 33px 38px, var(--accent) 38px 42px, transparent 42px 45px,
+      var(--ink) 45px 46px, transparent 46px 49px, var(--ink) 49px 51px, transparent 51px 55px,
+      var(--ink) 55px 58px, transparent 58px 61px, var(--ink) 61px 62px, transparent 62px 65px);
+  background-size:65px 100%;
+}
+.dropzone .strong{ font-size:14.5px; font-weight:600; }
+.dropzone .strong span{ color:var(--accent); }
+.dropzone .hint{ font-size:12.5px; color:var(--ink-mute); margin-top:6px; }
+input[type=file]{ display:none; }
+
+.sheet-select-row{
+  display:flex; align-items:center; gap:10px; margin-top:16px; padding:12px 14px;
+  background:#F7F7F3; border:1px solid #E9E9E3; border-radius:10px; font-size:13px; flex-wrap:wrap;
+}
+.sheet-select-row select{
+  padding:6px 10px; border:1px solid var(--line-strong); border-radius:7px;
+  font-family:var(--mono); font-size:12.5px; background:var(--panel);
+}
+
+/* ---------- Buttons ---------- */
+.btn{
+  font-family:var(--sans); font-size:13.5px; font-weight:600;
+  border-radius:9px; padding:10px 16px; cursor:pointer;
+  border:1px solid transparent; display:inline-flex; align-items:center; gap:7px;
+}
+.btn-primary{ background:var(--ink); color:#fff; }
+.btn-primary:hover{ background:#2A2E35; }
+.btn-amber{ background:var(--accent); color:#fff; }
+.btn-amber:hover{ background:var(--accent-dark); }
+.btn-outline{ background:var(--panel); color:var(--ink); border-color:var(--line-strong); font-weight:500; }
+.btn-outline:hover{ border-color:var(--ink); }
+.btn-sm{ padding:9px 13px; font-size:12.5px; }
+.btn:disabled{ opacity:.45; cursor:not-allowed; }
+#clearAllBtn{ border-color:#E4C7C0; color:var(--accent-dark); }
+#clearAllBtn:hover{ border-color:var(--accent-dark); }
+
+/* ---------- Mapping table ---------- */
+table.map-table{ width:100%; border-collapse:collapse; font-size:13px; margin-top:14px; }
+table.map-table th{
+  text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--ink-mute); font-weight:600; padding:9px 8px; border-bottom:1px solid var(--line);
+}
+table.map-table td{ padding:7px 8px; border-bottom:1px solid #F0F0EA; vertical-align:middle; }
+table.map-table td:first-child{ font-weight:500; }
+table.map-table select{
+  width:100%; padding:7px 9px; border:1px solid var(--line-strong); border-radius:7px;
+  font-size:12.5px; background:var(--panel); font-family:var(--sans);
+}
+.src-col{ font-family:var(--mono); font-size:12px; color:var(--accent); }
+
+/* ---------- Items ---------- */
+.toolbar{ display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+.search{
+  flex:1; min-width:220px; padding:10px 12px; border:1px solid var(--line-strong);
+  border-radius:9px; font-family:var(--sans); font-size:13.5px; background:var(--panel); outline:none;
+}
+.search:focus{ border-color:var(--ink); }
+.badge{
+  font-size:12px; font-weight:600; background:#F1F1EC; color:var(--ink-soft);
+  padding:5px 10px; border-radius:20px; white-space:nowrap;
+}
+.badge.warn{ background:var(--warn-dim); color:var(--warn); }
+.badge:empty{ display:none; }
+.info-note{
+  font-size:13px; color:var(--ink-soft); background:var(--panel); border:1px solid var(--line);
+  border-radius:12px; padding:14px 16px; margin-bottom:14px; line-height:1.6;
+}
+.info-note strong{ color:var(--ink); }
+
+.items-scroll{ background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:auto; }
+table.items{ width:100%; border-collapse:separate; border-spacing:0; font-size:13px; min-width:1180px; }
+table.items thead th{
+  position:sticky; top:0; background:#FAFAF7; text-align:left;
+  font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-mute);
+  font-weight:600; padding:11px 10px; border-bottom:1px solid var(--line); white-space:nowrap;
+}
+table.items td{ padding:7px 10px; border-bottom:1px solid #F0F0EA; vertical-align:middle; white-space:nowrap; }
+table.items tbody tr:hover td{ background:#FBFAF7; }
+table.items input, table.items td select{
+  width:100%; min-width:84px; padding:6px 8px; border:1px solid transparent; border-radius:6px;
+  font-family:var(--mono); font-size:12.5px; background:transparent; color:var(--ink);
+}
+table.items input:hover, table.items td select:hover{ border-color:var(--line); background:#FAFAF7; }
+table.items input:focus{ border-color:var(--ink); background:var(--panel); outline:none; }
+table.items input.missing{ background:var(--warn-dim); border-color:#E7C9A6; color:var(--warn); }
+table.items input[type=checkbox]{ width:15px; min-width:0; accent-color:var(--accent); cursor:pointer; }
+.sap-cell{ font-family:var(--mono); font-weight:700; font-size:12.5px; }
+.photo-cell{ display:flex; align-items:center; gap:6px; }
+.thumb{ width:30px; height:30px; object-fit:cover; border-radius:5px; border:1px solid var(--line); flex-shrink:0; background:#fff; }
+.thumb-empty{
+  display:flex; align-items:center; justify-content:center; font-size:8px;
+  color:var(--ink-mute); font-family:var(--mono); text-align:center; line-height:1.1;
+}
+.upload-btn{
+  cursor:pointer; font-size:11.5px; font-weight:600; color:var(--ink); white-space:nowrap;
+  border:1px solid var(--line-strong); border-radius:7px; padding:6px 10px; flex-shrink:0; background:var(--panel);
+}
+.upload-btn:hover{ border-color:var(--ink); }
+.row-actions{ display:flex; gap:6px; }
+.row-actions .btn{ padding:6px 12px; font-size:12px; border-radius:7px; }
+
+/* ---------- Listing card ---------- */
+.overlay{
+  position:fixed; inset:0; background:rgba(18,20,24,.55); z-index:100;
+  display:flex; align-items:flex-start; justify-content:center; padding:24px 16px; overflow-y:auto;
+}
+.label-shell{
+  background:var(--panel); border-radius:14px; max-width:820px; width:100%;
+  overflow:hidden; box-shadow:0 24px 60px rgba(0,0,0,.28);
+}
+.label-toolbar{
+  display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:14px 18px; border-bottom:1px solid var(--line); background:var(--panel);
+}
+#labelOverlayTitle{ font-size:14.5px; font-weight:600; }
+.label-toolbar .actions{ display:flex; gap:8px; flex-wrap:wrap; }
+#labelCardHost{ background:#EDEDE8; padding:20px; }
+
+.label-card{ background:#fff; border:1px solid var(--ink); font-family:var(--sans); }
+.label-head{
+  display:flex; justify-content:space-between; align-items:center; gap:12px;
+  padding:12px 18px; border-bottom:1px solid var(--ink); background:var(--ink); color:#fff;
+}
+.label-head .company{ font-weight:700; font-size:14px; letter-spacing:.01em; }
+.label-head .doc-id{ font-family:var(--mono); font-size:11px; color:#B9BDC4; }
+
+.label-body{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
+.label-media{ padding:18px; border-right:1px solid var(--line); display:flex; flex-direction:column; gap:10px; }
+.label-media img{ width:100%; aspect-ratio:1/1; object-fit:contain; border:1px solid var(--line); background:#fff; }
+.media-link-input{
+  width:100%; padding:8px 10px; border:1px solid var(--line-strong); border-radius:7px;
+  font-size:11.5px; font-family:var(--sans); outline:none;
+}
+.media-link-input:focus{ border-color:var(--ink); }
+.no-image{
+  width:100%; aspect-ratio:1/1; border:1px dashed var(--line-strong); background:#FAFAF7;
+  display:flex; align-items:center; justify-content:center; color:var(--ink-soft);
+  font-size:12px; text-align:center; padding:16px;
+}
+.label-fields{ padding:18px; min-width:0; }
+.field-row{ display:flex; justify-content:space-between; gap:14px; align-items:baseline; padding:7px 0; border-bottom:1px solid #F0F0EA; }
+.field-row .k{ font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); white-space:nowrap; }
+.field-row .v{ font-family:var(--mono); font-size:13px; font-weight:500; text-align:right; }
+.field-row.desc{ border-bottom:none; padding-bottom:0; }
+.field-row.desc .v{ text-align:left; font-family:var(--sans); font-size:17px; font-weight:600; line-height:1.3; letter-spacing:-0.01em; }
+.price-row .v{ color:var(--accent); font-size:14px; font-weight:700; }
+
+.customs-strip{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); border-top:1px solid var(--ink); }
+.customs-strip .cell{ padding:12px 18px; }
+.customs-strip .cell + .cell{ border-left:1px solid var(--line); }
+.customs-strip .k{ font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-soft); }
+.customs-strip .v{ font-weight:700; font-size:14px; margin-top:3px; }
+
+.barcode-strip{ display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); border-top:1px solid var(--ink); }
+.barcode-box{ padding:14px 12px 12px; text-align:center; }
+.barcode-box + .barcode-box{ border-left:1px solid var(--line); }
+.barcode-box .label{ font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.09em; color:var(--ink-soft); margin-bottom:8px; }
+/* Barcodes are drawn at high module density and scaled DOWN here — never up.
+   Upscaling a low-res canvas is what made the old printed output look blurry. */
+.barcode-box canvas{ display:block; width:100%; max-width:240px; height:auto; margin:0 auto; }
+.barcode-box .digits{ font-family:var(--mono); font-size:12.5px; letter-spacing:.16em; margin-top:6px; }
+.barcode-box .fmt{ font-family:var(--mono); font-size:11px; color:var(--ink-soft); margin-top:2px; }
+.barcode-box.empty{
+  color:var(--warn); background:var(--warn-dim); font-size:12px; font-weight:600;
+  display:flex; flex-direction:column; justify-content:center; min-height:110px; margin:12px; padding:12px;
+  border:1.5px dashed #C9A98A;
+}
+
+/* ---------- Misc ---------- */
+.empty-state{ text-align:center; padding:60px 20px; color:var(--ink-soft); }
+.empty-state .glyph{ font-family:var(--mono); font-size:13px; color:var(--accent); margin-bottom:10px; }
+.toast{
+  position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+  background:var(--ink); color:#fff; padding:11px 18px; border-radius:10px;
+  font-size:13px; z-index:200; opacity:0; pointer-events:none; transition:opacity .2s, transform .2s;
+  box-shadow:0 8px 24px rgba(0,0,0,.24);
+}
+.toast.show{ opacity:1; transform:translateX(-50%) translateY(-6px); }
+.install-strip{
+  display:none; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line);
+  border-radius:12px; padding:12px 16px; font-size:13px; margin-bottom:18px;
+}
+.install-strip.show{ display:flex; }
+.install-strip button{ margin-left:auto; }
+
+@media (max-width:720px){
+  .wrap{ padding:20px 14px 0; }
+  h1{ font-size:22px; }
+  .label-media{ border-right:none; border-bottom:1px solid var(--line); }
+  .customs-strip .cell + .cell{ border-left:none; border-top:1px solid var(--line); }
+  .barcode-box + .barcode-box{ border-left:none; border-top:1px solid var(--line); }
+  #labelCardHost{ padding:12px; }
+}
+@media print{
+  .topbar, .label-toolbar, .install-strip, .toolbar, .info-note{ display:none !important; }
+  body{ background:#fff; padding:0; }
+  .overlay{ position:static; background:none; padding:0; overflow:visible; }
+  .label-shell{ box-shadow:none; max-width:none; }
+  #labelCardHost{ background:none; padding:0; }
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="mark"></div>
+    <div>
+      <div class="title">Scannable Listing Generator</div>
+      <div class="subtitle">New launches &amp; customer listings</div>
+    </div>
+  </div>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="import" data-step="1" onclick="showTab('import')">Import</button>
+    <button class="tab-btn" data-tab="items" data-step="2" onclick="showTab('items')">Items <span class="count" id="itemCountBadge">(0)</span></button>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="install-strip" id="installStrip">
+    <span>Install this on your phone or desktop for one-tap access, even offline.</span>
+    <button class="btn btn-sm btn-outline" id="installBtn">Install app</button>
+  </div>
+
+  <!-- ============ IMPORT TAB ============ -->
+  <section id="tab-import">
+    <div class="import-grid">
+      <section>
+        <div class="eyebrow">Step 1</div>
+        <h1>Import item data</h1>
+        <p class="lead">Upload your SAP/BMF export, or any Excel/CSV, with case, bundle and piece barcodes. Columns are auto-matched — correct the mapping before importing.</p>
+
+        <div class="panel">
+          <div class="dropzone" id="dropzone">
+            <span class="icon"></span>
+            <div class="strong"><span>Click to choose a file</span> or drag it here</div>
+            <div class="hint">.xlsx, .xls or .csv — e.g. a BMF export</div>
+            <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+          </div>
+
+          <div id="sheetPicker" class="hidden">
+            <div class="sheet-select-row">
+              <label for="sheetSelect"><strong>Sheet</strong></label>
+              <select id="sheetSelect"></select>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div id="mappingArea" class="hidden">
+          <div class="panel" style="margin-top:0;">
+            <h2>Confirm column mapping</h2>
+            <p class="lead" style="margin:8px 0 0; font-size:13px;">We matched these automatically. Fields left as “— skip —” can be filled in manually after import.</p>
+            <table class="map-table" id="mapTable"></table>
+            <div style="margin-top:18px; display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
+              <button class="btn btn-primary" id="confirmImportBtn">Import rows</button>
+              <span id="rowPreviewCount" style="font-size:12.5px; color:var(--ink-mute);"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============ ITEMS TAB ============ -->
+  <section id="tab-items" class="hidden">
+    <div class="eyebrow">Step 2</div>
+    <h1>Review, complete &amp; generate</h1>
+    <p class="lead">Fill in anything your source file didn't have — HS Code, Country of Origin, prices, image link — then open an item to generate its listing.</p>
+
+    <div id="itemsEmptyState" class="empty-state">
+      <div class="glyph">— no items imported yet —</div>
+      <div>Go to <strong>Import</strong> to load a file.</div>
+    </div>
+
+    <div id="itemsContent" class="hidden">
+      <div class="info-note">
+        <strong>For photos your whole team can see:</strong> put the product photo in your shared
+        OneDrive/SharePoint folder → right-click it → <em>Share</em> → set access to
+        <em>“People in [company] with the link”</em> (view-only) → copy the link → paste it into the
+        Image URL field below, or in the item's <em>Open</em> view. The app converts it to a direct
+        image link automatically.<br>
+        <strong>Attach photos (bulk)</strong> opens your file picker for <em>this device only</em> —
+        select every photo at once with <strong>Ctrl+Click</strong> (Windows) or <strong>⌘+Click</strong>
+        (Mac) on each file, or <strong>Ctrl/⌘+A</strong> to grab a whole folder, then Open. Each is
+        matched to an item by filename = SAP code.
+      </div>
+      <div class="toolbar">
+        <input class="search" id="searchBox" placeholder="Search SAP code, description, brand…">
+        <span class="badge" id="filteredCount">0 items</span>
+        <span class="badge warn" id="incompleteCount">0 incomplete</span>
+        <span class="badge" id="selectedCount"></span>
+        <button class="btn btn-outline btn-sm" id="selectAllBtn">Select all</button>
+        <button class="btn btn-outline btn-sm" id="bulkPhotoBtn" title="Select many photos at once — matched by filename = SAP code. Only visible on this device, not shared with your team.">Attach photos (bulk, this device only)</button>
+        <input type="file" id="bulkPhotoInput" accept="image/*" multiple class="hidden">
+        <button class="btn btn-amber btn-sm" id="exportSelected2upBtn" title="One PDF, two listing cards per A4 page — good for quick printing/scanning">Export selected (2-up PDF)</button>
+        <button class="btn btn-amber btn-sm" id="exportSelectedBtn">Export selected (ZIP)</button>
+        <button class="btn btn-outline btn-sm" id="clearAllBtn">Clear all data</button>
+      </div>
+
+      <div class="items-scroll">
+        <table class="items" id="itemsTable">
+          <thead>
+            <tr>
+              <th></th>
+              <th>SAP Code</th>
+              <th>Brand</th>
+              <th>Description</th>
+              <th>Case BC</th>
+              <th>Bundle BC</th>
+              <th>Piece BC</th>
+              <th>Case Price (BHD)</th>
+              <th>Piece Price (BHD)</th>
+              <th>Dims (W×L×H)</th>
+              <th>Country of Origin</th>
+              <th>HS Code</th>
+              <th>Image URL</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="itemsTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<!-- ============ LABEL OVERLAY ============ -->
+<div class="overlay hidden" id="labelOverlay">
+  <div class="label-shell">
+    <div class="label-toolbar">
+      <strong id="labelOverlayTitle">Listing preview</strong>
+      <div class="actions">
+        <button class="btn btn-outline btn-sm" id="downloadXlsxBtn">Download Excel</button>
+        <button class="btn btn-amber btn-sm" id="downloadPdfBtn">Download PDF</button>
+        <button class="btn btn-outline btn-sm" onclick="closeLabel()">Close</button>
+      </div>
+    </div>
+    <div id="labelCardHost"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
